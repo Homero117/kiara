@@ -56,6 +56,25 @@
   .hablando #notas { opacity: 1; animation: flotar 1.2s ease-in-out infinite alternate; }
   @keyframes flotar { from { transform: translateY(0); } to { transform: translateY(-8px); } }
   @media (max-width: 600px) { #chat { height: 34vh; } #nombre { font-size: 20px; } }
+
+  /* ---------- Modo escritorio: Kiara sobre tus programas, sin fondo ---------- */
+  #barra, #globo { display: none; }
+  html.escritorio, body.escritorio { background: transparent; }
+  body.escritorio #info { display: none; }
+  body.escritorio #avatar { width: 80vw; height: 80vw; }
+  body.escritorio #barra { display: flex; position: absolute; top: 6px; right: 6px; z-index: 4; gap: 4px;
+                           opacity: 0; transition: opacity .2s; }
+  body.escritorio:hover #barra, body.escritorio.con-chat #barra { opacity: 1; }
+  #barra button { padding: 4px 8px; font-size: 13px; background: #1e1930dd; }
+  #arrastre { -webkit-app-region: drag; cursor: move; }
+  body.escritorio #chat { display: none; position: absolute; left: 6px; right: 6px; bottom: 6px; width: auto;
+                          height: 170px; min-height: 0; margin: 0; z-index: 4; }
+  body.escritorio.con-chat #chat { display: flex; }
+  body.escritorio #globo { display: block; position: absolute; top: 42px; left: 10px; right: 10px; z-index: 3;
+                           background: #1e1930ee; border: 1px solid var(--borde); border-radius: 16px;
+                           padding: 9px 13px; font-size: 14px; line-height: 1.4; max-height: 32%; overflow-y: auto;
+                           opacity: 0; visibility: hidden; transition: opacity .3s, visibility .3s; }
+  body.escritorio #globo.visible { opacity: 1; visibility: visible; }
 </style>
 </head>
 <body>
@@ -111,14 +130,26 @@
   <div id="info">
   <div id="nombre">Kiara</div>
   <div id="estado">en línea</div>
-  <div class="controles">
-    <button id="btnVoz" class="activo" title="Kiara lee sus respuestas en voz alta">🔊 Voz</button>
-    <button id="btnManos" title="Al terminar de hablar Kiara, vuelve a escucharte">🎙️ Manos libres</button>
+  <div class="controles ui">
+    <button data-accion="voz" title="Kiara lee sus respuestas en voz alta">🔊 Voz</button>
+    <button data-accion="manos" title="Al terminar de hablar Kiara, vuelve a escucharte">🎙️ Manos libres</button>
+    <button data-accion="espontaneo" title="De vez en cuando Kiara comenta por su cuenta lo que estás haciendo">💬 Comentarios</button>
+    <button data-accion="captura" title="Al comentar, Kiara ve una captura de tu pantalla (si no, solo el nombre de la ventana)">📸 Capturas</button>
   </div>
   </div>
+  <!-- Solo en modo escritorio -->
+  <div id="barra" class="ui">
+    <button id="arrastre" title="Arrastra para mover a Kiara">✥</button>
+    <button data-accion="chat" title="Mostrar/ocultar el chat">⌨️</button>
+    <button data-accion="voz" title="Voz">🔊</button>
+    <button data-accion="espontaneo" title="Comentarios por su cuenta">💬</button>
+    <button data-accion="captura" title="Capturas de pantalla al comentar">📸</button>
+    <button data-accion="cerrar" title="Cerrar a Kiara">✕</button>
+  </div>
+  <div id="globo" class="ui"></div>
 </div>
 
-<div id="chat">
+<div id="chat" class="ui">
   <div id="mensajes"></div>
   <form id="form">
     <input id="entrada" autocomplete="off" placeholder="Escríbele a Kiara..." autofocus>
@@ -135,6 +166,11 @@ const $ = s => document.querySelector(s);
 const mensajes = $("#mensajes"), entrada = $("#entrada"), estado = $("#estado"), lado = $("#lado");
 const boca = $("#boca");
 let vozActiva = true, manosLibres = false, ocupada = false;
+const ESCRITORIO = new URLSearchParams(location.search).has("escritorio");
+if (ESCRITORIO) { document.documentElement.classList.add("escritorio"); document.body.classList.add("escritorio"); }
+const pref = (k, defecto) => { const v = localStorage.getItem("kiara." + k); return v === null ? defecto : v === "1"; };
+let espontaneoActivo = pref("espontaneo", true), capturaActiva = pref("captura", false);
+let ultimaActividad = Date.now();
 
 function agregar(clase, texto) {
   const d = document.createElement("div");
@@ -161,7 +197,8 @@ let ctxAudio = null, analizador = null, datosAudio = null, audioActual = null;
 const colaAudio = []; let reproduciendo = false, generacion = 0;
 
 fetch("/api/voz/estado").then(r => r.json()).then(e => {
-  if (e.activa) { motorVoz = "eleven"; $("#btnVoz").title = "Voz de ElevenLabs: " + e.voz; }
+  if (e.activa) { motorVoz = "eleven";
+    document.querySelectorAll('[data-accion="voz"]').forEach(b => b.title = "Voz de ElevenLabs: " + e.voz); }
   else console.info("ElevenLabs no activo:", e.motivo, "- uso la voz del navegador");
 }).catch(() => {});
 
@@ -181,13 +218,13 @@ function volumenAudio() {
   return Math.min(1, Math.sqrt(s / datosAudio.length) * 5);
 }
 
-function decirEleven(frase) {
+function decirEleven(frase, emocion) {
   prepararAudio();
   colaHabla++;
   const promesa = fetch("/api/voz", { method: "POST", headers: { "Content-Type": "application/json" },
                                       body: JSON.stringify({ texto: frase }) })
     .then(async r => r.ok ? r.blob() : Promise.reject({ status: r.status, ...(await r.json().catch(() => ({}))) }));
-  colaAudio.push({ promesa, frase, gen: generacion });
+  colaAudio.push({ promesa, frase, emocion, gen: generacion });
   if (!reproduciendo) siguienteAudio();
 }
 
@@ -201,14 +238,15 @@ async function siguienteAudio() {
     const url = URL.createObjectURL(blob);
     const audio = new Audio(url); audioActual = audio;
     ctxAudio.createMediaElementSource(audio).connect(analizador);
-    audio.onplay = () => { moverBoca(true, "audio"); estado.textContent = "hablando..."; };
+    audio.onplay = () => { moverBoca(true, "audio"); estado.textContent = "hablando...";
+                           if (item.emocion) ponerEmocion(item.emocion); };
     await new Promise(fin => { audio.onended = audio.onerror = audio.onpause = fin; audio.play().catch(fin); });
     URL.revokeObjectURL(url); audioActual = null;
   } catch (e) {
     if (!e.cancelado && item.gen === generacion) {
       console.warn("ElevenLabs falló, uso la voz del navegador:", e.error || e);
       if (e.status === 503) motorVoz = "navegador";
-      decirNavegador(item.frase);
+      decirNavegador(item.frase, item.emocion);
     }
   }
   if (item.gen === generacion) terminoFrase();
@@ -244,21 +282,128 @@ function moverBoca(on, fuente = "azar") {
 }
 
 // ---------- Avatar Live2D (modelo Miara) ----------
-const l2d = { modelo: null, hablando: false, boca: 0, suave: 0 };
+const l2d = { modelo: null, hablando: false, boca: 0 };
+const MOSTRAR_HADA = false;  // el hada del modelo Miara le tapa la cara; true para mostrarla
+
+// Expresiones: valores objetivo de la cara. boca = forma (-1 triste .. 1 sonrisa), cejas = altura,
+// cejaAng = ángulo (+ preocupada, - enojada), ojos = apertura, inclina = cabeza de lado, cabezaY = arriba/abajo
+const EMOCIONES = {
+  neutral:    { boca: 0.25, cejas: 0,    cejaAng: 0,    ojos: 1,    inclina: 0,  cabezaY: 0 },
+  feliz:      { boca: 1,    cejas: 0.3,  cejaAng: 0.1,  ojos: 0.85, inclina: 4,  cabezaY: 3 },
+  risa:       { boca: 1,    cejas: 0.5,  cejaAng: 0.2,  ojos: 0.3,  inclina: 7,  cabezaY: 7 },
+  sorpresa:   { boca: 0,    cejas: 1,    cejaAng: 0.3,  ojos: 1.2,  inclina: -3, cabezaY: 6, abre: 0.35 },
+  pensando:   { boca: 0,    cejas: 0.4,  cejaAng: -0.2, ojos: 0.9,  inclina: -9, cabezaY: 9, mirada: [0.7, 0.7] },
+  curiosa:    { boca: 0.4,  cejas: 0.6,  cejaAng: 0.1,  ojos: 1.05, inclina: 10, cabezaY: 2 },
+  triste:     { boca: -0.8, cejas: -0.2, cejaAng: 0.8,  ojos: 0.7,  inclina: 5,  cabezaY: -9, mirada: [0, -0.5] },
+  preocupada: { boca: -0.4, cejas: 0.2,  cejaAng: 0.7,  ojos: 1,    inclina: 6,  cabezaY: -3 },
+  picara:     { boca: 0.8,  cejas: 0.3,  cejaAng: -0.4, ojos: 0.8,  inclina: 9,  cabezaY: 2, guino: true },
+  enojada:    { boca: -0.6, cejas: -0.6, cejaAng: -0.9, ojos: 0.85, inclina: 0,  cabezaY: -5 },
+};
+const anim = {
+  emocion: "neutral", hasta: 0, actual: { ...EMOCIONES.neutral, abre: 0 },
+  mirada: [0, 0], miradaObj: [0, 0], proxMirada: 0,
+  parpadeo: 0, proxParpadeo: performance.now() + 2500, guino: 0,
+  mouse: null, mouseT: 0, boca: 0,
+};
+
+function ponerEmocion(nombre, ms = 6000) {
+  if (!EMOCIONES[nombre]) return;
+  anim.emocion = nombre; anim.hasta = performance.now() + ms;
+  if (EMOCIONES[nombre].guino) anim.guino = performance.now() + 350;
+}
+
+document.addEventListener("mousemove", e => { anim.mouse = [e.clientX, e.clientY]; anim.mouseT = performance.now(); });
+
+function animar(modelo) {
+  const core = modelo.internalModel.coreModel;
+  const poner = (id, v) => {
+    const i = core.getParameterIndex(id);
+    if (i < 0) return;
+    core.setParameterValueByIndex(i, Math.max(core.getParameterMinimumValue(i), Math.min(core.getParameterMaximumValue(i), v)));
+  };
+  const ahora = performance.now(), t = ahora / 1000;
+  const suave = (a, b, k) => a + (b - a) * k;
+
+  // Emoción: vuelve a neutral cuando se acaba; "pensando" mientras espera la respuesta
+  if (lado.classList.contains("pensando")) anim.emocion = "pensando", anim.hasta = ahora + 1500;
+  else if (ahora > anim.hasta) anim.emocion = "neutral";
+  const obj = EMOCIONES[anim.emocion], act = anim.actual;
+  for (const k of ["boca", "cejas", "cejaAng", "ojos", "inclina", "cabezaY"]) act[k] = suave(act[k], obj[k], 0.08);
+  act.abre = suave(act.abre || 0, obj.abre || 0, 0.1);
+
+  // Mirada: sigue al mouse si se movió hace poco; si no, mira a lugares al azar (movimientos sacádicos)
+  if (obj.mirada) anim.miradaObj = obj.mirada;
+  else if (anim.mouse && ahora - anim.mouseT < 3000) {
+    const r = modelo.getBounds();
+    const cx = r.x + r.width / 2, cy = r.y + r.height * 0.18;  // aprox. la cara
+    anim.miradaObj = [Math.max(-1, Math.min(1, (anim.mouse[0] - cx) / 300)), Math.max(-1, Math.min(1, (cy - anim.mouse[1]) / 300))];
+  } else if (ahora > anim.proxMirada) {
+    const lejos = Math.random() < 0.25;
+    anim.miradaObj = lejos ? [(Math.random() * 2 - 1) * 0.8, (Math.random() * 2 - 1) * 0.5] : [(Math.random() - 0.5) * 0.3, (Math.random() - 0.5) * 0.2];
+    anim.proxMirada = ahora + 1200 + Math.random() * 3000;
+  }
+  anim.mirada[0] = suave(anim.mirada[0], anim.miradaObj[0], 0.25);
+  anim.mirada[1] = suave(anim.mirada[1], anim.miradaObj[1], 0.25);
+
+  // Parpadeo irregular, a veces doble
+  if (ahora > anim.proxParpadeo) {
+    anim.parpadeo = ahora;
+    anim.proxParpadeo = ahora + (Math.random() < 0.2 ? 350 : 2000 + Math.random() * 4500);
+  }
+  const fp = (ahora - anim.parpadeo) / 160;  // 0..2: cierra y abre
+  const cierre = fp < 1 ? fp : fp < 2 ? 2 - fp : 0;
+  const ojo = act.ojos * (1 - cierre);
+  const guinando = anim.guino && ahora > anim.guino && ahora < anim.guino + 300;
+
+  // Voz: volumen suavizado para boca, asentir y cejas
+  anim.boca = suave(anim.boca, l2d.hablando ? l2d.boca : 0, 0.35);
+  const v = anim.boca;
+
+  // Cabeza y cuerpo: balanceo lento + emoción + mirada + asentir al hablar
+  const angX = 7 * Math.sin(t * 0.45) + 3 * Math.sin(t * 1.1) + anim.mirada[0] * 12;
+  const angY = 3 * Math.sin(t * 0.33) + act.cabezaY + anim.mirada[1] * 8 + v * 6;
+  const angZ = 3 * Math.sin(t * 0.27) + act.inclina;
+  poner("ParamAngleX", angX); poner("ParamAngleY", angY); poner("ParamAngleZ", angZ);
+  poner("ParamBodyAngleX", angX * 0.3); poner("ParamBodyAngleZ", angZ * 0.35 + Math.sin(t * 0.2) * 1.5);
+  poner("ParamBreath", (Math.sin(t * 1.8) + 1) / 2);
+  poner("ParamEyeBallX", anim.mirada[0]); poner("ParamEyeBallY", anim.mirada[1]);
+  poner("ParamEyeLOpen", ojo); poner("ParamEyeROpen", guinando ? 0 : ojo);
+  for (const s of ["L", "R"]) {
+    poner(`ParamBrow${s}Y`, act.cejas + v * 0.25);
+    poner(`ParamBrow${s}Angle`, act.cejaAng);
+    poner(`ParamBrow${s}Form`, act.cejaAng * 0.5);
+  }
+  poner("ParamMouthForm", act.boca);
+  poner("ParamMouthOpenY", Math.max(v, act.abre));
+  // Brazos: un vaivén muy leve para que no se vea congelada
+  poner("ParamArmL1", Math.sin(t * 0.6) * 0.15); poner("ParamArmR1", Math.sin(t * 0.6 + 1) * 0.15);
+
+  if (!MOSTRAR_HADA) core.setPartOpacityById("PartFairy", 0);
+}
+
 async function iniciarLive2D() {
   try {
     const cont = $("#escena");
     lado.classList.add("live2d");
     const app = new PIXI.Application({ backgroundAlpha: 0, resizeTo: cont, antialias: true, autoDensity: true,
-                                       resolution: window.devicePixelRatio || 1 });
+                                       resolution: window.devicePixelRatio || 1, preserveDrawingBuffer: ESCRITORIO });
+    l2d.app = app;
     cont.appendChild(app.view);
     const modelo = await PIXI.live2d.Live2DModel.from(
       "/static/modelos/miara/runtime/miara_pro_t03.model3.json", { autoInteract: false });
     app.stage.addChild(modelo);
     l2d.modelo = modelo;
 
+    // Sin las animaciones de escena del modelo: caminan y mueven todo el cuerpo, y se salía del cuadro.
+    const mm = modelo.internalModel.motionManager;
+    mm.stopAllMotions();
+    mm.groups.idle = "__ninguna__";
+    // Nuestra animación va antes de la física, para que el pelo y la ropa reaccionen a la cabeza
+    modelo.internalModel.updateNaturalMovements = () => animar(modelo);
+
     // Encuadre: qué franja vertical del modelo se ve (0 = arriba, 1 = pies). 0 a 0.52 = de la cintura para arriba.
-    const ENCUADRE = { arriba: 0.0, abajo: 0.52 };
+    // En escritorio deja margen para que el pelo y las manos no se corten.
+    const ENCUADRE = ESCRITORIO ? { arriba: -0.03, abajo: 0.72 } : { arriba: 0.0, abajo: 0.52 };
     const ajustar = () => {
       const w = modelo.internalModel.width, h = modelo.internalModel.height;
       const franja = h * (ENCUADRE.abajo - ENCUADRE.arriba);
@@ -268,22 +413,35 @@ async function iniciarLive2D() {
     };
     ajustar(); new ResizeObserver(ajustar).observe(cont);
 
-    // Boca sincronizada con la voz: se aplica después de la animación en cada cuadro
-    modelo.internalModel.on("beforeModelUpdate", () => {
-      l2d.suave += ((l2d.hablando ? l2d.boca : 0) - l2d.suave) * 0.35;
-      if (l2d.hablando || l2d.suave > 0.02)
-        modelo.internalModel.coreModel.setParameterValueById("ParamMouthOpenY", l2d.suave);
-    });
-
-    // Si la tocas, reacciona
+    // Si la tocas, reacciona con una expresión al azar
     modelo.interactive = true; modelo.buttonMode = true;
-    modelo.on("pointertap", () => modelo.motion("Tap"));
+    modelo.on("pointertap", () => ponerEmocion(["sorpresa", "risa", "picara", "feliz"][Math.floor(Math.random() * 4)], 2500));
   } catch (e) {
     console.error("No se pudo cargar Live2D:", e);
     lado.classList.remove("live2d");  // vuelve al avatar SVG
   }
 }
 iniciarLive2D();
+
+// Etiquetas de emoción que escribe Kiara: [feliz], [risa]... Se quitan del texto y mueven su cara.
+const RE_EMOCION = /\[(neutral|feliz|risa|sorpresa|pensando|curiosa|triste|preocupada|p[ií]cara|enojada)\]/gi;
+function quitarEtiquetas(t) {
+  return t.replace(RE_EMOCION, "").replace(/\[[a-záéíóúñ]*$/i, "").replace(/^ +| +(?=[\s.,!?])/gm, "");
+}
+function emocionDe(frase) {
+  let m, ultima = null;
+  const re = new RegExp(RE_EMOCION.source, "gi");
+  while ((m = re.exec(frase))) ultima = m[1].toLowerCase().replace("í", "i");
+  if (ultima) return ultima;
+  // Si no puso etiqueta, la adivina por el texto
+  if (/ja(ja)+|je(je)+|jsjs/i.test(frase)) return "risa";
+  if (/\b(wow|uy|guau|no manches|en serio)\b/i.test(frase)) return "sorpresa";
+  if (/\b(lo siento|qué mal|triste|pobre)\b/i.test(frase)) return "triste";
+  if (/\b(descansa|cuídate|preocup|duerme|toma agua)/i.test(frase)) return "preocupada";
+  if (/\?/.test(frase)) return "curiosa";
+  if (/!/.test(frase)) return "feliz";
+  return null;
+}
 
 function limpiarParaVoz(t) {
   return t.replace(/```[\s\S]*?```/g, " (te dejo el código en el chat) ")
@@ -293,68 +451,115 @@ function limpiarParaVoz(t) {
 }
 
 function decir(frase) {
-  frase = limpiarParaVoz(frase).trim();
-  if (!vozActiva || !frase) return;
-  if (motorVoz === "eleven") decirEleven(frase); else decirNavegador(frase);
+  const emocion = emocionDe(frase);
+  frase = limpiarParaVoz(quitarEtiquetas(frase)).trim();
+  if (!vozActiva || !frase) { if (emocion) ponerEmocion(emocion); return; }
+  if (motorVoz === "eleven") decirEleven(frase, emocion); else decirNavegador(frase, emocion);
 }
 
-function decirNavegador(frase) {
+function decirNavegador(frase, emocion) {
   if (!sintesis) return;
   const u = new SpeechSynthesisUtterance(frase);
   if (vozKiara) u.voice = vozKiara;
   u.lang = vozKiara ? vozKiara.lang : "es-MX"; u.rate = 1.05; u.pitch = 1.15;
   colaHabla++;
-  u.onstart = () => { moverBoca(true); estado.textContent = "hablando..."; };
+  u.onstart = () => { moverBoca(true); estado.textContent = "hablando..."; if (emocion) ponerEmocion(emocion); };
   u.onend = u.onerror = terminoFrase;
   sintesis.speak(u);
 }
 
 // ---------- Chat ----------
+const globo = $("#globo");
+let timerGlobo = null;
+function mostrarGlobo(texto) {
+  if (!ESCRITORIO) return;
+  clearTimeout(timerGlobo);
+  globo.textContent = texto; globo.classList.add("visible"); globo.scrollTop = globo.scrollHeight;
+}
+function ocultarGloboLuego() { clearTimeout(timerGlobo); timerGlobo = setTimeout(() => globo.classList.remove("visible"), 15000); }
+
+// Recibe la respuesta en streaming, la muestra y la va diciendo frase por frase. Devuelve null si no hubo respuesta.
+async function recibir(url, cuerpo, burbuja) {
+  let buffer = "", completo = "";
+  const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(cuerpo) });
+  if (r.status === 204) return null;
+  const lector = r.body.getReader(), dec = new TextDecoder();
+  let resto = "";
+  while (true) {
+    const { value, done } = await lector.read();
+    if (done) break;
+    resto += dec.decode(value, { stream: true });
+    const partes = resto.split("\n\n"); resto = partes.pop();
+    for (const p of partes) {
+      if (!p.startsWith("data: ")) continue;
+      const ev = JSON.parse(p.slice(6));
+      if (ev.tipo === "texto") {
+        lado.classList.remove("pensando");
+        completo += ev.texto; buffer += ev.texto;
+        burbuja.textContent = quitarEtiquetas(completo); mensajes.scrollTop = mensajes.scrollHeight;
+        mostrarGlobo(quitarEtiquetas(completo));
+        const m = buffer.match(/^([\s\S]*?[.!?…:\n])\s+([\s\S]*)$/);
+        if (m && !buffer.includes("```")) { decir(m[1]); buffer = m[2]; }
+      } else if (ev.tipo === "memoria") {
+        agregar("nota", "💾 Kiara guardó algo en su memoria");
+        ponerEmocion("picara", 2500);  // guiña al guardar algo en su memoria
+      } else if (ev.tipo === "error") {
+        agregar("error", ev.texto); mostrarGlobo(ev.texto);
+      }
+    }
+  }
+  decir(buffer);
+  ocultarGloboLuego();
+  return completo;
+}
+
 async function enviar(texto) {
   if (!texto || ocupada) return;
-  ocupada = true; callar();
+  ocupada = true; ultimaActividad = Date.now(); callar();
   agregar("yo", texto);
   const burbuja = agregar("kiara", "");
   estado.textContent = "pensando..."; lado.classList.add("pensando");
-  let buffer = "", completo = "";
   try {
-    const r = await fetch("/api/chat", { method: "POST", headers: { "Content-Type": "application/json" },
-                                         body: JSON.stringify({ texto }) });
-    const lector = r.body.getReader(), dec = new TextDecoder();
-    let resto = "";
-    while (true) {
-      const { value, done } = await lector.read();
-      if (done) break;
-      resto += dec.decode(value, { stream: true });
-      const partes = resto.split("\n\n"); resto = partes.pop();
-      for (const p of partes) {
-        if (!p.startsWith("data: ")) continue;
-        const ev = JSON.parse(p.slice(6));
-        if (ev.tipo === "texto") {
-          lado.classList.remove("pensando");
-          completo += ev.texto; buffer += ev.texto;
-          burbuja.textContent = completo; mensajes.scrollTop = mensajes.scrollHeight;
-          // habla frase por frase conforme llega el texto
-          const m = buffer.match(/^([\s\S]*?[.!?…:\n])\s+([\s\S]*)$/);
-          if (m && !buffer.includes("```")) { decir(m[1]); buffer = m[2]; }
-        } else if (ev.tipo === "memoria") {
-          agregar("nota", "💾 Kiara guardó algo en su memoria");
-          if (l2d.modelo) l2d.modelo.motion("Flic");
-        } else if (ev.tipo === "error") {
-          agregar("error", ev.texto);
-        }
-      }
-    }
-    decir(buffer);
+    const completo = await recibir("/api/chat", { texto }, burbuja);
     if (!completo) burbuja.remove();
   } catch (e) {
+    burbuja.remove();
     agregar("error", "No pude conectar con el servidor de Kiara. ¿Está abierto app.py?");
   }
   lado.classList.remove("pensando"); ocupada = false;
   if (colaHabla === 0) { estado.textContent = "en línea"; if (manosLibres && !vozActiva) escuchar(); }
+  programarEspontaneo();
 }
 
 $("#form").addEventListener("submit", e => { e.preventDefault(); prepararAudio(); const t = entrada.value.trim(); entrada.value = ""; enviar(t); });
+entrada.addEventListener("input", () => { ultimaActividad = Date.now(); });
+
+// ---------- Comentarios espontáneos (sin que se los pidas) ----------
+const CONFIG = { espontaneo_min: 8, espontaneo_max: 20 };
+let timerEsp = null;
+fetch("/api/config").then(r => r.json()).then(c => { Object.assign(CONFIG, c); programarEspontaneo(); }).catch(() => programarEspontaneo());
+
+function programarEspontaneo(minutos) {
+  clearTimeout(timerEsp);
+  if (!espontaneoActivo) return;
+  const m = minutos ?? CONFIG.espontaneo_min + Math.random() * (CONFIG.espontaneo_max - CONFIG.espontaneo_min);
+  timerEsp = setTimeout(comentarSola, m * 60000);
+}
+
+async function comentarSola() {
+  // No interrumpe: si estás platicando con ella o escribiendo, lo deja para después
+  if (ocupada || colaHabla > 0 || Date.now() - ultimaActividad < 2 * 60000) return programarEspontaneo(2);
+  ocupada = true;
+  const burbuja = agregar("kiara", "");
+  try {
+    const completo = await recibir("/api/espontaneo", { captura: capturaActiva }, burbuja);
+    if (!completo) burbuja.remove();
+  } catch (e) {
+    burbuja.remove();
+  }
+  ocupada = false;
+  programarEspontaneo();
+}
 
 // ---------- Micrófono (voz a texto del navegador) ----------
 const Reconocimiento = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -372,21 +577,60 @@ if (Reconocimiento) {
     if (e.results[e.results.length - 1].isFinal) { entrada.value = ""; enviar(t.trim()); }
   };
   rec.onend = () => { $("#mic").classList.remove("escuchando"); if (!ocupada && colaHabla === 0) estado.textContent = "en línea"; };
-  rec.onerror = e => { if (e.error === "not-allowed") agregar("error", "Permite el micrófono en el navegador para hablar con Kiara."); };
+  rec.onerror = e => {
+    if (e.error === "not-allowed") agregar("error", "Permite el micrófono para hablar con Kiara.");
+    else if (e.error === "network") agregar("nota", "El micrófono no funciona aquí; úsalo en la versión de navegador (Chrome o Edge).");
+  };
   $("#mic").onclick = () => { prepararAudio(); callar(); escuchar(); };
 } else {
   $("#mic").onclick = () => agregar("nota", "Tu navegador no tiene reconocimiento de voz. Abre Kiara en Chrome o Edge para hablarle.");
-  $("#btnManos").style.display = "none";
+  document.querySelectorAll('[data-accion="manos"]').forEach(b => b.style.display = "none");
 }
 
-$("#btnVoz").onclick = () => { vozActiva = !vozActiva; $("#btnVoz").classList.toggle("activo", vozActiva);
-  if (!vozActiva) callar(); };
-$("#btnManos").onclick = () => { prepararAudio(); manosLibres = !manosLibres; $("#btnManos").classList.toggle("activo", manosLibres);
-  if (manosLibres) escuchar(); else if (rec) rec.stop(); };
+// ---------- Botones ----------
+const acciones = {
+  voz: () => { vozActiva = !vozActiva; if (!vozActiva) callar(); },
+  manos: () => { prepararAudio(); manosLibres = !manosLibres; if (manosLibres) escuchar(); else if (rec) rec.stop(); },
+  espontaneo: () => { espontaneoActivo = !espontaneoActivo; localStorage.setItem("kiara.espontaneo", espontaneoActivo ? "1" : "0");
+                      if (espontaneoActivo) programarEspontaneo(); else clearTimeout(timerEsp); },
+  captura: () => { capturaActiva = !capturaActiva; localStorage.setItem("kiara.captura", capturaActiva ? "1" : "0"); },
+  chat: () => { document.body.classList.toggle("con-chat"); if (document.body.classList.contains("con-chat")) entrada.focus(); },
+  cerrar: () => window.kiara && window.kiara.cerrar(),
+};
+function actualizarBotones() {
+  const estados = { voz: vozActiva, manos: manosLibres, espontaneo: espontaneoActivo, captura: capturaActiva,
+                    chat: document.body.classList.contains("con-chat") };
+  document.querySelectorAll("[data-accion]").forEach(b => b.classList.toggle("activo", !!estados[b.dataset.accion]));
+}
+document.querySelectorAll("[data-accion]").forEach(b => b.addEventListener("click", () => {
+  acciones[b.dataset.accion](); actualizarBotones();
+}));
+actualizarBotones();
+
+// ---------- Modo escritorio: los clics pasan a tus programas salvo sobre Kiara o sus botones ----------
+function sobreModelo(x, y) {
+  if (!l2d.app || !lado.classList.contains("live2d")) return false;
+  const c = l2d.app.view, r = c.getBoundingClientRect();
+  if (x < r.left || y < r.top || x >= r.right || y >= r.bottom) return false;
+  const gl = l2d.app.renderer.gl, px = new Uint8Array(4);
+  const sx = Math.floor((x - r.left) * c.width / r.width);
+  const sy = Math.floor(c.height - (y - r.top) * c.height / r.height) - 1;
+  gl.readPixels(sx, sy, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
+  return px[3] > 30;
+}
+if (ESCRITORIO && window.kiara) {
+  let traspasa = null;
+  const fijar = si => { if (si !== traspasa) { traspasa = si; window.kiara.traspasar(si); } };
+  document.addEventListener("mousemove", e => {
+    const el = document.elementFromPoint(e.clientX, e.clientY);
+    fijar(!((el && el.closest(".ui")) || sobreModelo(e.clientX, e.clientY)));
+  });
+  document.addEventListener("mouseleave", () => fijar(true));
+}
 
 // ---------- Historial previo ----------
 fetch("/api/historial").then(r => r.json()).then(h => {
-  if (h.length) { h.forEach(m => agregar(m.role === "user" ? "yo" : "kiara", m.texto)); agregar("nota", "— conversación anterior —"); }
+  if (h.length) { h.forEach(m => agregar(m.role === "user" ? "yo" : "kiara", m.role === "user" ? m.texto : quitarEtiquetas(m.texto))); agregar("nota", "— conversación anterior —"); }
   else agregar("kiara", "¡Hola, Homero! Soy Kiara. Por fin nos conocemos... cuéntame, ¿cómo va tu día?");
 });
 </script>

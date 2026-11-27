@@ -6,6 +6,7 @@ import datetime
 import json
 import os
 import pathlib
+import random
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -155,6 +156,14 @@ def voz_eleven():
     return _voz["id"], _voz["nombre"]
 
 
+@app.get("/api/config")
+def config():
+    return jsonify({
+        "espontaneo_min": float(os.environ.get("KIARA_ESPONTANEO_MIN", 8)),
+        "espontaneo_max": float(os.environ.get("KIARA_ESPONTANEO_MAX", 20)),
+    })
+
+
 @app.get("/api/voz/estado")
 def voz_estado():
     vid, info = voz_eleven()
@@ -196,8 +205,18 @@ def ver_historial():
     visibles = [
         {"role": m["role"], "texto": m["content"].split("] ", 1)[-1] if m["role"] == "user" else m["content"]}
         for m in historial[-40:]
+        if not m.get("auto")  # los avisos automáticos no se muestran como mensajes tuyos
     ]
     return jsonify(visibles)
+
+
+def ahora_texto():
+    return datetime.datetime.now().strftime("%A %d/%m/%Y %H:%M")
+
+
+def sin_clave():
+    return Response(evento("error", texto="Falta tu clave de la API: pégala en el archivo .env de la carpeta Kiara."),
+                    mimetype="text/event-stream")
 
 
 @app.post("/api/chat")
@@ -205,67 +224,146 @@ def chat():
     texto = (request.get_json(silent=True) or {}).get("texto", "").strip()
     if not texto:
         return jsonify({"error": "Mensaje vacío"}), 400
-
-    ahora = datetime.datetime.now().strftime("%A %d/%m/%Y %H:%M")
-    mensaje_usuario = {"role": "user", "content": f"[{ahora}] {texto}"}
-
     client = cliente()
     if client is None:
-        return Response(evento("error", texto="Falta tu clave de la API: pégala en el archivo .env de la carpeta Kiara."),
-                        mimetype="text/event-stream")
+        return sin_clave()
+    mensaje = {"role": "user", "content": f"[{ahora_texto()}] {texto}"}
+    return Response(responder(client, mensaje, mensaje), mimetype="text/event-stream")
 
-    def generar():
-        historial = leer_json(HISTORIAL, [])
-        msgs = contexto(historial) + [mensaje_usuario]
-        respuesta = []
+
+# ---------- Comentarios espontáneos sobre lo que haces ----------
+TIPOS_COMENTARIO = {
+    "dato": "un dato curioso relacionado con lo que está haciendo (o de cualquier tema, si no hay relación clara)",
+    "chiste": "un chiste o una broma sobre lo que está haciendo",
+    "comentario": "un comentario casual o una pregunta de amiga sobre lo que está haciendo",
+    "opinion": "tu opinión honesta sobre lo que está haciendo (la canción, el código, el video, el juego, la página...)",
+}
+
+
+def ventana_activa():
+    """Programa y título de la ventana activa en Windows (None si no se puede saber)."""
+    if os.name != "nt":
+        return None
+    import ctypes
+    from ctypes import wintypes
+
+    user32, kernel32 = ctypes.windll.user32, ctypes.windll.kernel32
+    hwnd = user32.GetForegroundWindow()
+    if not hwnd:
+        return None
+    largo = user32.GetWindowTextLengthW(hwnd)
+    titulo = ctypes.create_unicode_buffer(largo + 1)
+    user32.GetWindowTextW(hwnd, titulo, largo + 1)
+    pid = wintypes.DWORD()
+    user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+    proceso = ""
+    h = kernel32.OpenProcess(0x1000, False, pid.value)  # PROCESS_QUERY_LIMITED_INFORMATION
+    if h:
+        tam = wintypes.DWORD(1024)
+        ruta = ctypes.create_unicode_buffer(1024)
+        if kernel32.QueryFullProcessImageNameW(h, 0, ruta, ctypes.byref(tam)):
+            proceso = os.path.basename(ruta.value)
+        kernel32.CloseHandle(h)
+    return {"titulo": titulo.value.strip(), "proceso": proceso}
+
+
+def captura_pantalla():
+    """Captura de la pantalla principal en JPEG base64, reducida para gastar menos."""
+    import base64
+    import io
+
+    from PIL import ImageGrab
+
+    img = ImageGrab.grab()
+    img.thumbnail((1280, 1280))
+    buf = io.BytesIO()
+    img.convert("RGB").save(buf, "JPEG", quality=70)
+    return base64.b64encode(buf.getvalue()).decode()
+
+
+@app.post("/api/espontaneo")
+def espontaneo():
+    datos = request.get_json(silent=True) or {}
+    client = cliente()
+    if client is None:
+        return sin_clave()
+    v = ventana_activa()
+    # Si no hay ventana o es la propia Kiara, no comenta esta vez
+    if not v or not v["titulo"] or (v["titulo"] == "Kiara" and v["proceso"].lower() in ("electron.exe", "")):
+        return Response(status=204)
+
+    tipo = random.choice(list(TIPOS_COMENTARIO))
+    nota = (
+        f"[{ahora_texto()}] [Aviso automático: Homero NO escribió esto ni te preguntó nada; tú decides hablarle por tu cuenta. "
+        f'En este momento tiene activa la ventana "{v["titulo"]}" del programa {v["proceso"] or "desconocido"}. '
+        f"Dile {TIPOS_COMENTARIO[tipo]}. Máximo 1 o 2 frases, natural, como si te asomaras a ver qué hace. "
+        "No menciones este aviso. Si ya comentaste algo muy parecido hace poco, cambia de tema.]"
+    )
+    guardado = {"role": "user", "content": nota, "auto": True}
+    enviado = {"role": "user", "content": nota}
+    if datos.get("captura"):
         try:
-            for _ in range(5):  # máximo 5 vueltas de herramientas por mensaje
-                with client.beta.messages.stream(
-                    model=MODELO,
-                    max_tokens=4000,
-                    system=prompt_sistema(),
-                    messages=msgs,
-                    tools=HERRAMIENTAS,
-                    output_config={"effort": "low"},
-                    betas=["server-side-fallback-2026-07-01"],
-                    fallbacks="default",
-                ) as stream:
-                    for trozo in stream.text_stream:
-                        respuesta.append(trozo)
-                        yield evento("texto", texto=trozo)
-                    final = stream.get_final_message()
+            enviado["content"] = [
+                {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": captura_pantalla()}},
+                {"type": "text", "text": nota + " Te adjunto una captura de su pantalla (la chica anime en una "
+                                               "esquina eres tú misma, ignórala)."},
+            ]
+        except Exception as e:  # sin Pillow o sin permiso: comenta solo con el título
+            print("No se pudo tomar la captura:", e)
+    return Response(responder(client, enviado, guardado), mimetype="text/event-stream")
 
-                if final.stop_reason == "refusal":
-                    aviso = "Uy, de eso no puedo hablar. ¿Cambiamos de tema?"
-                    respuesta.append(aviso)
-                    yield evento("texto", texto=aviso)
-                    break
-                if final.stop_reason != "tool_use":
-                    break
 
-                msgs.append({"role": "assistant", "content": final.content})
-                resultados = [ejecutar_herramienta(b) for b in final.content if b.type == "tool_use"]
-                msgs.append({"role": "user", "content": resultados})
-                yield evento("memoria")
-        except anthropic.AuthenticationError:
-            yield evento("error", texto="La clave de la API no es válida. Revisa el archivo .env")
-            return
-        except anthropic.RateLimitError:
-            yield evento("error", texto="Demasiadas peticiones, espera un momento.")
-            return
-        except anthropic.APIStatusError as e:
-            yield evento("error", texto=f"Error de la API ({e.status_code}): {e.message}")
-            return
-        except anthropic.APIConnectionError:
-            yield evento("error", texto="No hay conexión con la API. ¿Tienes internet?")
-            return
+def responder(client, mensaje_enviado, mensaje_guardado):
+    """Genera la respuesta de Kiara en streaming (eventos SSE) y la guarda en el historial."""
+    historial = leer_json(HISTORIAL, [])
+    msgs = contexto(historial) + [mensaje_enviado]
+    respuesta = []
+    try:
+        for _ in range(5):  # máximo 5 vueltas de herramientas por mensaje
+            with client.beta.messages.stream(
+                model=MODELO,
+                max_tokens=4000,
+                system=prompt_sistema(),
+                messages=msgs,
+                tools=HERRAMIENTAS,
+                output_config={"effort": "low"},
+                betas=["server-side-fallback-2026-07-01"],
+                fallbacks="default",
+            ) as stream:
+                for trozo in stream.text_stream:
+                    respuesta.append(trozo)
+                    yield evento("texto", texto=trozo)
+                final = stream.get_final_message()
 
-        historial.append(mensaje_usuario)
-        historial.append({"role": "assistant", "content": "".join(respuesta).strip() or "..."})
-        guardar_json(HISTORIAL, historial)
-        yield evento("fin")
+            if final.stop_reason == "refusal":
+                aviso = "Uy, de eso no puedo hablar. ¿Cambiamos de tema?"
+                respuesta.append(aviso)
+                yield evento("texto", texto=aviso)
+                break
+            if final.stop_reason != "tool_use":
+                break
 
-    return Response(generar(), mimetype="text/event-stream")
+            msgs.append({"role": "assistant", "content": final.content})
+            resultados = [ejecutar_herramienta(b) for b in final.content if b.type == "tool_use"]
+            msgs.append({"role": "user", "content": resultados})
+            yield evento("memoria")
+    except anthropic.AuthenticationError:
+        yield evento("error", texto="La clave de la API no es válida. Revisa el archivo .env")
+        return
+    except anthropic.RateLimitError:
+        yield evento("error", texto="Demasiadas peticiones, espera un momento.")
+        return
+    except anthropic.APIStatusError as e:
+        yield evento("error", texto=f"Error de la API ({e.status_code}): {e.message}")
+        return
+    except anthropic.APIConnectionError:
+        yield evento("error", texto="No hay conexión con la API. ¿Tienes internet?")
+        return
+
+    historial.append(mensaje_guardado)
+    historial.append({"role": "assistant", "content": "".join(respuesta).strip() or "..."})
+    guardar_json(HISTORIAL, historial)
+    yield evento("fin")
 
 
 if __name__ == "__main__":

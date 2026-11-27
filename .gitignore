@@ -11,3 +11,6 @@ static/lib/live2dcubismcore.min.js
 # Python
 __pycache__/
 *.pyc
+
+# Electron
+escritorio/node_modules/
