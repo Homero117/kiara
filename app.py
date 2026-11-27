@@ -38,6 +38,7 @@ def cargar_env():
 cargar_env()
 
 MODELO = os.environ.get("KIARA_MODELO", "claude-opus-5-5")
+USUARIO = os.environ.get("KIARA_USUARIO", "amigo")  # cómo te llama Kiara
 MAX_MENSAJES = 60  # cuántos mensajes recientes se mandan como contexto
 
 _client = None
@@ -60,7 +61,7 @@ HERRAMIENTAS = [
     {
         "name": "recordar",
         "description": (
-            "Guarda en la memoria permanente un dato importante sobre Homero "
+            f"Guarda en la memoria permanente un dato importante sobre {USUARIO} "
             "(gustos, planes, personas, proyectos, estado de ánimo) para recordarlo "
             "en futuras conversaciones. Escribe el dato como una frase corta y clara."
         ),
@@ -87,10 +88,10 @@ def guardar_json(ruta, datos):
 
 
 def prompt_sistema():
-    texto = (BASE / "personalidad.md").read_text(encoding="utf-8")
+    texto = (BASE / "personalidad.md").read_text(encoding="utf-8").replace("{usuario}", USUARIO)
     memoria = leer_json(MEMORIA, [])
     if memoria:
-        texto += "\n# Lo que recuerdas de Homero\n" + "\n".join(f"- {m['dato']}" for m in memoria)
+        texto += f"\n# Lo que recuerdas de {USUARIO}\n" + "\n".join(f"- {m['dato']}" for m in memoria)
     return [{"type": "text", "text": texto, "cache_control": {"type": "ephemeral"}}]
 
 
@@ -161,6 +162,7 @@ def config():
     return jsonify({
         "espontaneo_min": float(os.environ.get("KIARA_ESPONTANEO_MIN", 8)),
         "espontaneo_max": float(os.environ.get("KIARA_ESPONTANEO_MAX", 20)),
+        "usuario": USUARIO,
     })
 
 
@@ -294,7 +296,7 @@ def espontaneo():
 
     tipo = random.choice(list(TIPOS_COMENTARIO))
     nota = (
-        f"[{ahora_texto()}] [Aviso automático: Homero NO escribió esto ni te preguntó nada; tú decides hablarle por tu cuenta. "
+        f"[{ahora_texto()}] [Aviso automático: {USUARIO} NO escribió esto ni te preguntó nada; tú decides hablarle por tu cuenta. "
         f'En este momento tiene activa la ventana "{v["titulo"]}" del programa {v["proceso"] or "desconocido"}. '
         f"Dile {TIPOS_COMENTARIO[tipo]}. Máximo 1 o 2 frases, natural, como si te asomaras a ver qué hace. "
         "No menciones este aviso. Si ya comentaste algo muy parecido hace poco, cambia de tema.]"

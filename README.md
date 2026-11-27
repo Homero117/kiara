@@ -41,12 +41,17 @@ Kiara/
 ├── .env.example            # Plantilla de configuración
 ├── iniciar.bat             # Abre Kiara en el navegador
 ├── iniciar-escritorio.bat  # Abre Kiara sobre tus programas
+├── instalar.bat / .ps1     # Instalador automático (ver INSTALAR.md)
+├── INSTALAR.md             # Guía rápida de instalación para amigos
+├── CLAUDE.md               # Contexto del proyecto para Claude Code
 └── requirements.txt
 ```
 
 ## Instalación
 
-Requisitos: Windows, Python 3.10+, Node.js 18+ (para el modo escritorio) y Chrome o Edge (para el micrófono).
+> **¿Solo quieres probarla?** Sigue la guía rápida **[INSTALAR.md](INSTALAR.md)**: doble clic en `instalar.bat` y el instalador hace todo.
+
+Instalación manual. Requisitos: Windows, Python 3.10+, Node.js 18+ (para el modo escritorio) y Chrome o Edge (para el micrófono).
 
 1. **Dependencias**
    ```bash
@@ -68,6 +73,7 @@ Requisitos: Windows, Python 3.10+, Node.js 18+ (para el modo escritorio) y Chrom
 
 | Variable | Para qué |
 |---|---|
+| `KIARA_USUARIO` | Cómo te llama Kiara (tu nombre o apodo) |
 | `KIARA_MODELO` | Modelo de Claude. `claude-haiku-5-5` es mucho más barato y rápido |
 | `KIARA_ESPONTANEO_MIN` / `KIARA_ESPONTANEO_MAX` | Cada cuántos minutos comenta por su cuenta (por defecto 8 a 20) |
 | `ELEVENLABS_VOZ` / `ELEVENLABS_VOICE_ID` | Qué voz usar (por defecto busca "Liz") |
