@@ -1,0 +1,13 @@
+# Claves y configuración local
+.env
+
+# Historial y memoria personal de Kiara
+datos/
+
+# Archivos de Live2D que no se pueden redistribuir (ver README)
+static/modelos/
+static/lib/live2dcubismcore.min.js
+
+# Python
+__pycache__/
+*.pyc

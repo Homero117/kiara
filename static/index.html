@@ -1,0 +1,394 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kiara</title>
+<style>
+  :root {
+    --fondo: #14111f; --panel: #1e1930; --borde: #2e2748; --texto: #ece8f6; --tenue: #9b93b8;
+    --kiara: #b06cff; --yo: #2c6e7f; --acento: #ff5fa2;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; height: 100vh; display: flex; flex-direction: column; overflow: hidden;
+         font-family: "Segoe UI", system-ui, sans-serif;
+         background: radial-gradient(circle at 50% 35%, #2a1f45, var(--fondo) 70%); color: var(--texto); }
+  /* Kiara ocupa casi toda la ventana */
+  #lado { flex: 1; min-height: 0; position: relative; display: flex; align-items: center; justify-content: center; }
+  #avatar { width: min(60vh, 90vw); height: min(60vh, 90vw); }
+  #escena { position: absolute; inset: 0; display: none; cursor: pointer; }
+  #escena canvas { display: block; }
+  .live2d #escena { display: block; }
+  .live2d #avatar { display: none; }
+  /* Nombre, estado y botones flotando arriba a la izquierda */
+  #info { position: absolute; top: 16px; left: 20px; z-index: 2; display: flex; flex-direction: column; gap: 6px; }
+  #nombre { font-size: 26px; font-weight: 700; letter-spacing: 1px; text-shadow: 0 2px 8px #000a; }
+  #estado { color: var(--tenue); font-size: 13px; height: 18px; text-shadow: 0 1px 4px #000a; }
+  .controles { display: flex; gap: 8px; flex-wrap: wrap; }
+  button { background: var(--panel); color: var(--texto); border: 1px solid var(--borde); border-radius: 999px;
+           padding: 8px 14px; font-size: 14px; cursor: pointer; }
+  button:hover { border-color: var(--kiara); }
+  button.activo { background: var(--kiara); border-color: var(--kiara); color: #fff; }
+  /* Chat pequeño abajo */
+  #chat { flex: none; height: 22vh; min-height: 150px; width: min(900px, 96vw); margin: 0 auto 12px;
+          display: flex; flex-direction: column; background: #1e1930cc; backdrop-filter: blur(8px);
+          border: 1px solid var(--borde); border-radius: 18px; overflow: hidden; }
+  #mensajes { flex: 1; overflow-y: auto; padding: 12px 16px; display: flex; flex-direction: column; gap: 8px; }
+  .msg { max-width: 80%; padding: 7px 12px; border-radius: 14px; line-height: 1.4; white-space: pre-wrap;
+         word-wrap: break-word; font-size: 14px; }
+  .kiara { background: var(--panel); border: 1px solid var(--borde); align-self: flex-start; border-bottom-left-radius: 4px; }
+  .yo { background: var(--yo); align-self: flex-end; border-bottom-right-radius: 4px; }
+  .error { background: #5a1f2b; align-self: center; font-size: 14px; }
+  .nota { color: var(--tenue); font-size: 12px; align-self: center; }
+  form { display: flex; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--borde); }
+  #entrada { flex: 1; background: var(--panel); color: var(--texto); border: 1px solid var(--borde);
+             border-radius: 999px; padding: 9px 16px; font-size: 14px; outline: none; }
+  #entrada:focus { border-color: var(--kiara); }
+  #mic.escuchando { background: var(--acento); border-color: var(--acento); }
+  /* Animaciones del avatar */
+  #ojos { transform-origin: 150px 150px; animation: parpadeo 4.5s infinite; }
+  @keyframes parpadeo { 0%, 94%, 100% { transform: scaleY(1); } 97% { transform: scaleY(0.1); } }
+  #cabeza { transform-origin: 150px 260px; transition: transform .3s; }
+  .hablando #cabeza { animation: asentir 1.6s ease-in-out infinite; }
+  @keyframes asentir { 0%, 100% { transform: rotate(0); } 25% { transform: rotate(-2deg); } 75% { transform: rotate(2deg); } }
+  .pensando #cabeza { transform: rotate(-6deg); }
+  #notas { opacity: 0; transition: opacity .3s; }
+  .hablando #notas { opacity: 1; animation: flotar 1.2s ease-in-out infinite alternate; }
+  @keyframes flotar { from { transform: translateY(0); } to { transform: translateY(-8px); } }
+  @media (max-width: 600px) { #chat { height: 34vh; } #nombre { font-size: 20px; } }
+</style>
+</head>
+<body>
+<div id="lado">
+  <div id="escena" title="Tócala"></div>
+  <svg id="avatar" viewBox="0 0 300 300" aria-label="Avatar de Kiara">
+    <defs>
+      <linearGradient id="pelo" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stop-color="#5b2a9e"/><stop offset="1" stop-color="#2e1457"/>
+      </linearGradient>
+    </defs>
+    <circle cx="150" cy="150" r="140" fill="#251d3d" stroke="#3a2f5e" stroke-width="3"/>
+    <g id="cabeza">
+      <!-- pelo de atrás -->
+      <path d="M70 150 Q65 60 150 55 Q235 60 230 150 L238 235 Q200 250 190 215 L110 215 Q100 250 62 235 Z" fill="url(#pelo)"/>
+      <!-- cuello y hombros -->
+      <rect x="135" y="200" width="30" height="35" fill="#f1c7a8"/>
+      <path d="M70 300 Q80 235 150 230 Q220 235 230 300 Z" fill="#2c6e7f"/>
+      <!-- audífonos en el cuello -->
+      <path d="M105 238 Q150 270 195 238" fill="none" stroke="#1a1a24" stroke-width="7" stroke-linecap="round"/>
+      <rect x="92" y="226" width="22" height="28" rx="9" fill="#ff5fa2"/>
+      <rect x="186" y="226" width="22" height="28" rx="9" fill="#ff5fa2"/>
+      <!-- cara -->
+      <ellipse cx="150" cy="145" rx="62" ry="70" fill="#f6d2b6"/>
+      <!-- mejillas -->
+      <ellipse cx="112" cy="168" rx="10" ry="6" fill="#ff9fb8" opacity=".55"/>
+      <ellipse cx="188" cy="168" rx="10" ry="6" fill="#ff9fb8" opacity=".55"/>
+      <!-- ojos -->
+      <g id="ojos">
+        <ellipse cx="125" cy="145" rx="9" ry="12" fill="#2b1a4a"/>
+        <ellipse cx="175" cy="145" rx="9" ry="12" fill="#2b1a4a"/>
+        <circle cx="128" cy="140" r="3.5" fill="#fff"/><circle cx="178" cy="140" r="3.5" fill="#fff"/>
+      </g>
+      <!-- lentes -->
+      <g fill="none" stroke="#b06cff" stroke-width="3.5">
+        <circle cx="125" cy="146" r="20"/><circle cx="175" cy="146" r="20"/>
+        <path d="M145 144 Q150 140 155 144"/>
+      </g>
+      <!-- cejas -->
+      <path id="cejaI" d="M110 118 Q125 111 138 117" stroke="#2e1457" stroke-width="4" fill="none" stroke-linecap="round"/>
+      <path id="cejaD" d="M162 117 Q175 111 190 118" stroke="#2e1457" stroke-width="4" fill="none" stroke-linecap="round"/>
+      <!-- boca -->
+      <ellipse id="boca" cx="150" cy="185" rx="12" ry="3" fill="#a3344f"/>
+      <!-- fleco -->
+      <path d="M85 125 Q90 70 150 68 Q215 70 218 128 Q195 95 160 100 Q165 88 150 85 Q140 105 85 125 Z" fill="url(#pelo)"/>
+      <!-- broche de estrella -->
+      <path d="M200 98 l4 9 10 1 -8 6 3 10 -9 -6 -9 6 3 -10 -8 -6 10 -1 z" fill="#ffd34f"/>
+    </g>
+    <g id="notas" fill="#ff5fa2" font-size="26" font-family="Segoe UI Symbol, sans-serif">
+      <text x="236" y="90">♪</text><text x="40" y="110">♫</text>
+    </g>
+  </svg>
+  <div id="info">
+  <div id="nombre">Kiara</div>
+  <div id="estado">en línea</div>
+  <div class="controles">
+    <button id="btnVoz" class="activo" title="Kiara lee sus respuestas en voz alta">🔊 Voz</button>
+    <button id="btnManos" title="Al terminar de hablar Kiara, vuelve a escucharte">🎙️ Manos libres</button>
+  </div>
+  </div>
+</div>
+
+<div id="chat">
+  <div id="mensajes"></div>
+  <form id="form">
+    <input id="entrada" autocomplete="off" placeholder="Escríbele a Kiara..." autofocus>
+    <button type="button" id="mic" title="Hablar">🎤</button>
+    <button type="submit">Enviar</button>
+  </form>
+</div>
+
+<script src="/static/lib/live2dcubismcore.min.js"></script>
+<script src="/static/lib/pixi.min.js"></script>
+<script src="/static/lib/cubism4.min.js"></script>
+<script>
+const $ = s => document.querySelector(s);
+const mensajes = $("#mensajes"), entrada = $("#entrada"), estado = $("#estado"), lado = $("#lado");
+const boca = $("#boca");
+let vozActiva = true, manosLibres = false, ocupada = false;
+
+function agregar(clase, texto) {
+  const d = document.createElement("div");
+  d.className = "msg " + clase; d.textContent = texto;
+  mensajes.appendChild(d); mensajes.scrollTop = mensajes.scrollHeight;
+  return d;
+}
+
+// ---------- Voz (texto a voz del navegador) ----------
+const sintesis = window.speechSynthesis;
+let vozKiara = null, colaHabla = 0, animBoca = null;
+function elegirVoz() {
+  const voces = sintesis ? sintesis.getVoices() : [];
+  const es = voces.filter(v => v.lang && v.lang.toLowerCase().startsWith("es"));
+  const femenina = v => /sabina|dalia|helena|laura|paulina|elvira|female|mujer|monica|lupe|mia/i.test(v.name);
+  vozKiara = es.find(v => v.lang === "es-MX" && femenina(v)) || es.find(v => v.lang === "es-MX")
+          || es.find(femenina) || es[0] || null;
+}
+if (sintesis) { elegirVoz(); sintesis.onvoiceschanged = elegirVoz; }
+
+// ---------- Voz de ElevenLabs (si hay clave) ----------
+let motorVoz = "navegador";          // "eleven" cuando el servidor tiene la voz configurada
+let ctxAudio = null, analizador = null, datosAudio = null, audioActual = null;
+const colaAudio = []; let reproduciendo = false, generacion = 0;
+
+fetch("/api/voz/estado").then(r => r.json()).then(e => {
+  if (e.activa) { motorVoz = "eleven"; $("#btnVoz").title = "Voz de ElevenLabs: " + e.voz; }
+  else console.info("ElevenLabs no activo:", e.motivo, "- uso la voz del navegador");
+}).catch(() => {});
+
+function prepararAudio() {           // el navegador solo permite audio tras un clic o tecla
+  if (!ctxAudio) {
+    ctxAudio = new AudioContext();
+    analizador = ctxAudio.createAnalyser(); analizador.fftSize = 512;
+    datosAudio = new Uint8Array(analizador.fftSize);
+    analizador.connect(ctxAudio.destination);
+  }
+  if (ctxAudio.state === "suspended") ctxAudio.resume();
+}
+
+function volumenAudio() {
+  analizador.getByteTimeDomainData(datosAudio);
+  let s = 0; for (const x of datosAudio) { const d = (x - 128) / 128; s += d * d; }
+  return Math.min(1, Math.sqrt(s / datosAudio.length) * 5);
+}
+
+function decirEleven(frase) {
+  prepararAudio();
+  colaHabla++;
+  const promesa = fetch("/api/voz", { method: "POST", headers: { "Content-Type": "application/json" },
+                                      body: JSON.stringify({ texto: frase }) })
+    .then(async r => r.ok ? r.blob() : Promise.reject({ status: r.status, ...(await r.json().catch(() => ({}))) }));
+  colaAudio.push({ promesa, frase, gen: generacion });
+  if (!reproduciendo) siguienteAudio();
+}
+
+async function siguienteAudio() {
+  const item = colaAudio.shift();
+  if (!item) { reproduciendo = false; return; }
+  reproduciendo = true;
+  try {
+    const blob = await item.promesa;
+    if (item.gen !== generacion) throw { cancelado: true };
+    const url = URL.createObjectURL(blob);
+    const audio = new Audio(url); audioActual = audio;
+    ctxAudio.createMediaElementSource(audio).connect(analizador);
+    audio.onplay = () => { moverBoca(true, "audio"); estado.textContent = "hablando..."; };
+    await new Promise(fin => { audio.onended = audio.onerror = audio.onpause = fin; audio.play().catch(fin); });
+    URL.revokeObjectURL(url); audioActual = null;
+  } catch (e) {
+    if (!e.cancelado && item.gen === generacion) {
+      console.warn("ElevenLabs falló, uso la voz del navegador:", e.error || e);
+      if (e.status === 503) motorVoz = "navegador";
+      decirNavegador(item.frase);
+    }
+  }
+  if (item.gen === generacion) terminoFrase();
+  siguienteAudio();
+}
+
+function terminoFrase() {
+  colaHabla--;
+  if (colaHabla <= 0) { colaHabla = 0; moverBoca(false); estado.textContent = "en línea";
+    if (manosLibres && !ocupada) escuchar(); }
+}
+
+function callar() {
+  generacion++; colaAudio.length = 0;
+  if (audioActual) audioActual.pause();
+  if (sintesis) sintesis.cancel();
+  colaHabla = 0; moverBoca(false);
+}
+
+function moverBoca(on, fuente = "azar") {
+  clearInterval(animBoca);
+  if (on) {
+    lado.classList.add("hablando"); l2d.hablando = true;
+    animBoca = setInterval(() => {
+      const a = fuente === "audio" && analizador ? volumenAudio() : Math.random();
+      boca.setAttribute("ry", 3 + a * 9);
+      l2d.boca = fuente === "audio" ? a : 0.15 + a * 0.85;
+    }, fuente === "audio" ? 40 : 110);
+  } else {
+    lado.classList.remove("hablando"); boca.setAttribute("ry", 3);
+    l2d.hablando = false; l2d.boca = 0;
+  }
+}
+
+// ---------- Avatar Live2D (modelo Miara) ----------
+const l2d = { modelo: null, hablando: false, boca: 0, suave: 0 };
+async function iniciarLive2D() {
+  try {
+    const cont = $("#escena");
+    lado.classList.add("live2d");
+    const app = new PIXI.Application({ backgroundAlpha: 0, resizeTo: cont, antialias: true, autoDensity: true,
+                                       resolution: window.devicePixelRatio || 1 });
+    cont.appendChild(app.view);
+    const modelo = await PIXI.live2d.Live2DModel.from(
+      "/static/modelos/miara/runtime/miara_pro_t03.model3.json", { autoInteract: false });
+    app.stage.addChild(modelo);
+    l2d.modelo = modelo;
+
+    // Encuadre: qué franja vertical del modelo se ve (0 = arriba, 1 = pies). 0 a 0.52 = de la cintura para arriba.
+    const ENCUADRE = { arriba: 0.0, abajo: 0.52 };
+    const ajustar = () => {
+      const w = modelo.internalModel.width, h = modelo.internalModel.height;
+      const franja = h * (ENCUADRE.abajo - ENCUADRE.arriba);
+      const s = cont.clientHeight / franja;
+      modelo.scale.set(s);
+      modelo.position.set((cont.clientWidth - w * s) / 2, -h * ENCUADRE.arriba * s);
+    };
+    ajustar(); new ResizeObserver(ajustar).observe(cont);
+
+    // Boca sincronizada con la voz: se aplica después de la animación en cada cuadro
+    modelo.internalModel.on("beforeModelUpdate", () => {
+      l2d.suave += ((l2d.hablando ? l2d.boca : 0) - l2d.suave) * 0.35;
+      if (l2d.hablando || l2d.suave > 0.02)
+        modelo.internalModel.coreModel.setParameterValueById("ParamMouthOpenY", l2d.suave);
+    });
+
+    // Si la tocas, reacciona
+    modelo.interactive = true; modelo.buttonMode = true;
+    modelo.on("pointertap", () => modelo.motion("Tap"));
+  } catch (e) {
+    console.error("No se pudo cargar Live2D:", e);
+    lado.classList.remove("live2d");  // vuelve al avatar SVG
+  }
+}
+iniciarLive2D();
+
+function limpiarParaVoz(t) {
+  return t.replace(/```[\s\S]*?```/g, " (te dejo el código en el chat) ")
+          .replace(/[*_#`>~]/g, "")
+          .replace(/https?:\/\/\S+/g, "el enlace")
+          .replace(/[\u{1F000}-\u{1FFFF}\u{2600}-\u{27BF}]/gu, "");
+}
+
+function decir(frase) {
+  frase = limpiarParaVoz(frase).trim();
+  if (!vozActiva || !frase) return;
+  if (motorVoz === "eleven") decirEleven(frase); else decirNavegador(frase);
+}
+
+function decirNavegador(frase) {
+  if (!sintesis) return;
+  const u = new SpeechSynthesisUtterance(frase);
+  if (vozKiara) u.voice = vozKiara;
+  u.lang = vozKiara ? vozKiara.lang : "es-MX"; u.rate = 1.05; u.pitch = 1.15;
+  colaHabla++;
+  u.onstart = () => { moverBoca(true); estado.textContent = "hablando..."; };
+  u.onend = u.onerror = terminoFrase;
+  sintesis.speak(u);
+}
+
+// ---------- Chat ----------
+async function enviar(texto) {
+  if (!texto || ocupada) return;
+  ocupada = true; callar();
+  agregar("yo", texto);
+  const burbuja = agregar("kiara", "");
+  estado.textContent = "pensando..."; lado.classList.add("pensando");
+  let buffer = "", completo = "";
+  try {
+    const r = await fetch("/api/chat", { method: "POST", headers: { "Content-Type": "application/json" },
+                                         body: JSON.stringify({ texto }) });
+    const lector = r.body.getReader(), dec = new TextDecoder();
+    let resto = "";
+    while (true) {
+      const { value, done } = await lector.read();
+      if (done) break;
+      resto += dec.decode(value, { stream: true });
+      const partes = resto.split("\n\n"); resto = partes.pop();
+      for (const p of partes) {
+        if (!p.startsWith("data: ")) continue;
+        const ev = JSON.parse(p.slice(6));
+        if (ev.tipo === "texto") {
+          lado.classList.remove("pensando");
+          completo += ev.texto; buffer += ev.texto;
+          burbuja.textContent = completo; mensajes.scrollTop = mensajes.scrollHeight;
+          // habla frase por frase conforme llega el texto
+          const m = buffer.match(/^([\s\S]*?[.!?…:\n])\s+([\s\S]*)$/);
+          if (m && !buffer.includes("```")) { decir(m[1]); buffer = m[2]; }
+        } else if (ev.tipo === "memoria") {
+          agregar("nota", "💾 Kiara guardó algo en su memoria");
+          if (l2d.modelo) l2d.modelo.motion("Flic");
+        } else if (ev.tipo === "error") {
+          agregar("error", ev.texto);
+        }
+      }
+    }
+    decir(buffer);
+    if (!completo) burbuja.remove();
+  } catch (e) {
+    agregar("error", "No pude conectar con el servidor de Kiara. ¿Está abierto app.py?");
+  }
+  lado.classList.remove("pensando"); ocupada = false;
+  if (colaHabla === 0) { estado.textContent = "en línea"; if (manosLibres && !vozActiva) escuchar(); }
+}
+
+$("#form").addEventListener("submit", e => { e.preventDefault(); prepararAudio(); const t = entrada.value.trim(); entrada.value = ""; enviar(t); });
+
+// ---------- Micrófono (voz a texto del navegador) ----------
+const Reconocimiento = window.SpeechRecognition || window.webkitSpeechRecognition;
+let rec = null;
+function escuchar() {
+  if (!rec || ocupada) return;
+  try { rec.start(); } catch (_) {}
+}
+if (Reconocimiento) {
+  rec = new Reconocimiento(); rec.lang = "es-MX"; rec.interimResults = true;
+  rec.onstart = () => { $("#mic").classList.add("escuchando"); estado.textContent = "escuchándote..."; };
+  rec.onresult = e => {
+    const t = Array.from(e.results).map(r => r[0].transcript).join("");
+    entrada.value = t;
+    if (e.results[e.results.length - 1].isFinal) { entrada.value = ""; enviar(t.trim()); }
+  };
+  rec.onend = () => { $("#mic").classList.remove("escuchando"); if (!ocupada && colaHabla === 0) estado.textContent = "en línea"; };
+  rec.onerror = e => { if (e.error === "not-allowed") agregar("error", "Permite el micrófono en el navegador para hablar con Kiara."); };
+  $("#mic").onclick = () => { prepararAudio(); callar(); escuchar(); };
+} else {
+  $("#mic").onclick = () => agregar("nota", "Tu navegador no tiene reconocimiento de voz. Abre Kiara en Chrome o Edge para hablarle.");
+  $("#btnManos").style.display = "none";
+}
+
+$("#btnVoz").onclick = () => { vozActiva = !vozActiva; $("#btnVoz").classList.toggle("activo", vozActiva);
+  if (!vozActiva) callar(); };
+$("#btnManos").onclick = () => { prepararAudio(); manosLibres = !manosLibres; $("#btnManos").classList.toggle("activo", manosLibres);
+  if (manosLibres) escuchar(); else if (rec) rec.stop(); };
+
+// ---------- Historial previo ----------
+fetch("/api/historial").then(r => r.json()).then(h => {
+  if (h.length) { h.forEach(m => agregar(m.role === "user" ? "yo" : "kiara", m.texto)); agregar("nota", "— conversación anterior —"); }
+  else agregar("kiara", "¡Hola, Homero! Soy Kiara. Por fin nos conocemos... cuéntame, ¿cómo va tu día?");
+});
+</script>
+</body>
+</html>
