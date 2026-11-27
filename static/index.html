@@ -631,7 +631,7 @@ if (ESCRITORIO && window.kiara) {
 // ---------- Historial previo ----------
 fetch("/api/historial").then(r => r.json()).then(h => {
   if (h.length) { h.forEach(m => agregar(m.role === "user" ? "yo" : "kiara", m.role === "user" ? m.texto : quitarEtiquetas(m.texto))); agregar("nota", "— conversación anterior —"); }
-  else fetch("/api/config").then(r => r.json()).then(c => agregar("kiara", `¡Hola, ${c.usuario}! Soy Kiara. Por fin nos conocemos... cuéntame, ¿cómo va tu día?`));
+  else fetch("/api/config").then(r => r.json()).then(c => agregar("kiara", "¡Hola, cariño! Soy Kiara. Por fin nos conocemos... cuéntame, ¿cómo va tu día?"));
 });
 </script>
 </body>
